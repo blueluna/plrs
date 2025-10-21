@@ -1,0 +1,3 @@
+[workspace]
+members = [ "xilinx", "tools" ]
+resolver = "2"

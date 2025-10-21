@@ -1,0 +1,11 @@
+[package]
+name = "logik-xilinx"
+version = "0.1.0"
+edition = "2024"
+authors = ["Erik Bånvik <erik.public@gmail.com>"]
+license = "MIT"
+
+[dependencies]
+uio-rs = { git = "https://github.com/blueluna/uio-rs.git" }
+#uio-rs = { path = "../../uio-rs/uio-rs" }
+log = "0.4"
