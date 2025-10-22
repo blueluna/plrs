@@ -315,7 +315,7 @@ dependencies = [
 [[package]]
 name = "uio-rs"
 version = "0.1.0"
-source = "git+https://github.com/blueluna/uio-rs.git#80974cec0fcd091fffc66260c7821f74728a7d10"
+source = "git+https://github.com/blueluna/uio-rs.git#7096ecd945407c2c3ed9ef237aced476a351fffe"
 dependencies = [
  "byteorder",
  "libc",

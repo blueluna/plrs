@@ -4,6 +4,8 @@ use uio_rs;
 /// Error
 #[derive(Debug)]
 pub enum Error {
+    /// System error
+    System,
     /// No device found
     NoDevice,
     /// Failed to lock device
@@ -16,6 +18,14 @@ pub enum Error {
     OutOfBound,
     /// No data available
     Empty,
+    /// Cannot accept more data
+    Full,
+    /// Read from a empty storage
+    UnderRun,
+    /// Write to a full storage
+    OverRun,
+    /// The length register does not match the number of bytes written
+    LengthMismatch,
     /// Underlying IO error
     Io(std::io::Error),
     /// Underlying UIO error

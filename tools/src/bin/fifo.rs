@@ -1,5 +1,6 @@
 use clap::{Arg, Command};
 use env_logger;
+use logik_xilinx::StreamFifoDataWidth;
 use std::process::ExitCode;
 use uio_rs::{self, Device};
 
@@ -29,6 +30,23 @@ fn main() -> ExitCode {
                     .action(clap::ArgAction::Set)
                     .required(true),
             ),
+        )
+        .subcommand(
+            Command::new("write")
+                .about("Write to the FIFO")
+                .arg(
+                    Arg::new("size")
+                        .index(1)
+                        .value_parser(clap::value_parser!(usize))
+                        .action(clap::ArgAction::Set)
+                        .required(true),
+                )
+                .arg(
+                    Arg::new("value")
+                        .index(2)
+                        .action(clap::ArgAction::Set)
+                        .required(true),
+                ),
         );
     let matches = cmd.get_matches();
     let device_name: &String = matches.get_one("device").unwrap();
@@ -81,6 +99,75 @@ fn main() -> ExitCode {
                         eprintln!("FIFO read failed {:?}", error);
                     }
                 }
+            }
+        }
+        Some(("write", cmd)) => {
+            if let (Some(size), Some(text)) =
+                (cmd.get_one::<usize>("size"), cmd.get_one::<String>("value"))
+            {
+                let data_width = fifo.data_width();
+                let bytes = size * data_width.byte_count();
+                let mut block = vec![0u8; bytes];
+                match data_width {
+                    StreamFifoDataWidth::Bits32 => {
+                        let v = {
+                            if text.starts_with("0x") {
+                                let (_, hex) = text.split_at(2);
+                                u32::from_str_radix(hex, 16).unwrap_or(0)
+                            } else {
+                                u32::from_str_radix(text, 10).unwrap_or(0)
+                            }
+                        };
+                        let mut write_value = v;
+                        for n in 0..*size {
+                            let offset = n * data_width.byte_count();
+                            let part = &mut block[offset..offset + data_width.byte_count()];
+                            part.copy_from_slice(&write_value.to_ne_bytes());
+                            write_value = write_value.wrapping_add(1);
+                        }
+                    }
+                    StreamFifoDataWidth::Bits64 => {
+                        let v = {
+                            if text.starts_with("0x") {
+                                let (_, hex) = text.split_at(2);
+                                u64::from_str_radix(hex, 16).unwrap_or(0)
+                            } else {
+                                u64::from_str_radix(text, 10).unwrap_or(0)
+                            }
+                        };
+                        let mut write_value = v;
+                        for n in 0..*size {
+                            let offset = n * data_width.byte_count();
+                            let part = &mut block[offset..offset + data_width.byte_count()];
+                            part.copy_from_slice(&write_value.to_ne_bytes());
+                            write_value = write_value.wrapping_add(1);
+                        }
+                    }
+                    StreamFifoDataWidth::Bits128 => {
+                        let v = {
+                            if text.starts_with("0x") {
+                                let (_, hex) = text.split_at(2);
+                                u128::from_str_radix(hex, 16).unwrap_or(0)
+                            } else {
+                                u128::from_str_radix(text, 10).unwrap_or(0)
+                            }
+                        };
+                        let mut write_value = v;
+                        for n in 0..*size {
+                            let offset = n * data_width.byte_count();
+                            let part = &mut block[offset..offset + data_width.byte_count()];
+                            part.copy_from_slice(&write_value.to_ne_bytes());
+                            write_value = write_value.wrapping_add(1);
+                        }
+                    }
+                    StreamFifoDataWidth::Bits256 => {
+                        eprintln!("256-bit not implemented");
+                    }
+                    StreamFifoDataWidth::Bits512 => {
+                        eprintln!("512-bit not implemented");
+                    }
+                }
+                fifo.write(&block, 0).expect("Failed to write to FIFO");
             }
         }
         _ => unreachable!("Invalid configuration"),

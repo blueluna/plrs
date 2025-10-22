@@ -1,6 +1,7 @@
 use crate::error::Error;
 use uio_rs;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StreamFifoDataWidth {
     Bits32,
     Bits64,
@@ -62,6 +63,10 @@ impl<'a> StreamFifo<'a> {
         }
     }
 
+    pub fn data_width(&self) -> StreamFifoDataWidth {
+        self.data_width
+    }
+
     pub fn reset(&mut self) -> Result<(), Error> {
         self.axi_lite
             .write_u32(REG_AXI4_STREAM_RESET, RESET_MAGIC)?;
@@ -92,6 +97,15 @@ impl<'a> StreamFifo<'a> {
             .write_u32(
                 REG_INTERRUPT_STATUS,
                 INTERRUPT_RX_ERROR | INTERRUPT_RX_COMPLETE,
+            )
+            .map_err(|e| e.into())
+    }
+
+    pub fn interrupts_clear_tx(&mut self) -> Result<(), Error> {
+        self.axi_lite
+            .write_u32(
+                REG_INTERRUPT_STATUS,
+                INTERRUPT_TX_ERROR | INTERRUPT_TX_COMPLETE,
             )
             .map_err(|e| e.into())
     }
@@ -174,9 +188,146 @@ impl<'a> StreamFifo<'a> {
         if (interrupts & INTERRUPT_RX_ERROR) != 0 {
             log::warn!("Receive error, {:08x}", interrupts);
             self.reset()?;
-            return Err(Error::Address);
+            let error = if (interrupts & INTERRUPT_RX_OVER_READ) == INTERRUPT_RX_OVER_READ {
+                Error::OverRun
+            } else if (interrupts & INTERRUPT_RX_UNDER_READ) == INTERRUPT_RX_UNDER_READ
+                || (interrupts & INTERRUPT_RX_UNDER_RUN) == INTERRUPT_RX_UNDER_RUN
+            {
+                Error::UnderRun
+            } else {
+                Error::System
+            };
+            return Err(error);
         }
         Ok((read_words, destination))
+    }
+
+    pub fn write(&mut self, data: &[u8], destination: u8) -> Result<usize, Error> {
+        let fifo_word_size = self.data_width.byte_count();
+        let word_count = (data.len() + (fifo_word_size - 1)) / fifo_word_size;
+        let mut buffer = [0u8; 64];
+
+        self.interrupts_clear_tx()?;
+
+        let vacancy = self.axi_lite.read_u32(REG_TX_VACANCY)? as usize;
+        if vacancy < word_count {
+            log::warn!(
+                "Not enough vacant words, {} vacant, {} required",
+                vacancy,
+                word_count
+            );
+            return Err(Error::Full);
+        }
+
+        self.axi_lite
+            .write_u32(REG_TX_DESTINATION, u32::from(destination & 0x0f))?;
+
+        let iter = data.chunks_exact(fifo_word_size);
+        let remainder = iter.remainder();
+
+        log::debug!(
+            "TX {} bytes {} words {} vacancy {} destination {} remainder",
+            data.len(),
+            word_count,
+            vacancy,
+            destination,
+            remainder.len()
+        );
+
+        let bytes = if let Some(ref mut axi) = self.axi {
+            // It seems like it is not possible to just copy slices of the same size to the FIFO data register.
+            // Following type shenanigans seems to work.
+
+            for chunk in iter.into_iter() {
+                match self.data_width {
+                    StreamFifoDataWidth::Bits32 => {
+                        axi.write_u32(
+                            FULL_REG_WRITE,
+                            u32::from_ne_bytes(chunk.try_into().unwrap()),
+                        )?;
+                    }
+                    StreamFifoDataWidth::Bits64 => {
+                        axi.write_u64(
+                            FULL_REG_WRITE,
+                            u64::from_ne_bytes(chunk.try_into().unwrap()),
+                        )?;
+                    }
+                    StreamFifoDataWidth::Bits128 => {
+                        axi.write_u128(
+                            FULL_REG_WRITE,
+                            u128::from_ne_bytes(chunk.try_into().unwrap()),
+                        )?;
+                    }
+                    _ => {
+                        unimplemented!();
+                    }
+                }
+            }
+            if remainder.len() > 0 {
+                buffer[..remainder.len()].copy_from_slice(remainder);
+                let part = &buffer[..fifo_word_size];
+                match self.data_width {
+                    StreamFifoDataWidth::Bits32 => {
+                        axi.write_u32(
+                            FULL_REG_WRITE,
+                            u32::from_ne_bytes(part.try_into().unwrap()),
+                        )?;
+                    }
+                    StreamFifoDataWidth::Bits64 => {
+                        axi.write_u64(
+                            FULL_REG_WRITE,
+                            u64::from_ne_bytes(part.try_into().unwrap()),
+                        )?;
+                    }
+                    StreamFifoDataWidth::Bits128 => {
+                        axi.write_u128(
+                            FULL_REG_WRITE,
+                            u128::from_ne_bytes(part.try_into().unwrap()),
+                        )?;
+                    }
+                    _ => {
+                        unimplemented!();
+                    }
+                }
+            }
+            data.len()
+        } else {
+            for chunk in iter {
+                self.axi_lite
+                    .write_u32(REG_TX_DATA, u32::from_ne_bytes(chunk.try_into().unwrap()))?;
+            }
+            if remainder.len() > 0 {
+                buffer[..remainder.len()].copy_from_slice(remainder);
+                let part = &buffer[..fifo_word_size];
+                self.axi_lite
+                    .write_u32(REG_TX_DATA, u32::from_ne_bytes(part.try_into().unwrap()))?;
+            }
+            data.len()
+        };
+
+        log::debug!("Transmit {} bytes", bytes);
+        self.axi_lite.write_u32(REG_TX_LENGTH, bytes as u32)?;
+        loop {
+            let interrupts = self.axi_lite.read_u32(REG_INTERRUPT_STATUS)?;
+            if interrupts & INTERRUPT_TX_ERROR != 0 {
+                log::warn!("Transmit error, {:08x}", interrupts);
+                self.reset()?;
+                let error = if (interrupts & INTERRUPT_TX_OVER_RUN) == INTERRUPT_TX_OVER_RUN {
+                    Error::OverRun
+                } else if (interrupts & INTERRUPT_TX_LENGTH_MISMATCH)
+                    == INTERRUPT_TX_LENGTH_MISMATCH
+                {
+                    Error::LengthMismatch
+                } else {
+                    Error::System
+                };
+                return Err(error);
+            }
+            if interrupts & INTERRUPT_TX_COMPLETE != 0 {
+                break;
+            }
+        }
+        Ok(bytes)
     }
 }
 
@@ -248,8 +399,6 @@ const INTERRUPT_ALL: u32 = INTERRUPT_RX_PROGRAMMABLE_EMPTY
     | INTERRUPT_RX_UNDER_RUN
     | INTERRUPT_RX_OVER_READ
     | INTERRUPT_RX_UNDER_READ;
-/// Error status interrupts
-const INTERRUPT_ERROR: u32 = INTERRUPT_RX_ERROR | INTERRUPT_TX_ERROR;
 /// Receive Error status interrupts
 const INTERRUPT_RX_ERROR: u32 =
     INTERRUPT_RX_UNDER_RUN | INTERRUPT_RX_OVER_READ | INTERRUPT_RX_UNDER_READ;
