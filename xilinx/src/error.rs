@@ -2,20 +2,10 @@ use uio_rs;
 /// Crate errors
 
 /// Error
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Error {
-    /// System error
-    System,
-    /// No device found
-    NoDevice,
-    /// Failed to lock device
-    DeviceLock,
-    /// Invalid address
-    Address,
-    /// Parse error
-    Parse,
-    /// Value out of bounds
-    OutOfBound,
+    /// No memory map found
+    NoMemoryMap,
     /// No data available
     Empty,
     /// Cannot accept more data
@@ -27,20 +17,14 @@ pub enum Error {
     /// The length register does not match the number of bytes written
     LengthMismatch,
     /// Underlying IO error
-    Io(std::io::Error),
+    Io(std::io::ErrorKind),
     /// Underlying UIO error
     Uio(uio_rs::Error),
 }
 
 impl From<std::io::Error> for Error {
     fn from(error: std::io::Error) -> Self {
-        Error::Io(error)
-    }
-}
-
-impl From<std::num::ParseIntError> for Error {
-    fn from(_: std::num::ParseIntError) -> Self {
-        Error::Parse
+        Error::Io(error.kind())
     }
 }
 

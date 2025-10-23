@@ -59,7 +59,7 @@ impl<'a> StreamFifo<'a> {
                 axi: None,
             })
         } else {
-            Err(Error::OutOfBound)
+            Err(Error::NoMemoryMap)
         }
     }
 
@@ -136,7 +136,7 @@ impl<'a> StreamFifo<'a> {
             let read_count = read_bytes / fifo_word_size;
             let mut target_index = 0;
             log::debug!("AXI {} count {} bytes", read_count, fifo_word_size);
-            for n in 0..read_count {
+            for _ in 0..read_count {
                 match axi.read_exact(FULL_REG_READ, fifo_word_size) {
                     Ok(fifo_chunk) => match self.data_width {
                         StreamFifoDataWidth::Bits32 => {
@@ -162,13 +162,8 @@ impl<'a> StreamFifo<'a> {
                                 (value & 0x000000000000000000000000ffffffff) as u32;
                             target_index += 4;
                         }
-                        StreamFifoDataWidth::Bits256 => {
-                            log::debug!("AXI {:>3} {} bytes", n, fifo_word_size);
-                            target_index += 8;
-                        }
-                        StreamFifoDataWidth::Bits512 => {
-                            log::debug!("AXI {:>3} {} bytes", n, fifo_word_size);
-                            target_index += 16;
+                        _ => {
+                            unimplemented!();
                         }
                     },
                     Err(ref error) => {
@@ -195,7 +190,7 @@ impl<'a> StreamFifo<'a> {
             {
                 Error::UnderRun
             } else {
-                Error::System
+                    unreachable!();
             };
             return Err(error);
         }
@@ -319,7 +314,7 @@ impl<'a> StreamFifo<'a> {
                 {
                     Error::LengthMismatch
                 } else {
-                    Error::System
+                    unreachable!();
                 };
                 return Err(error);
             }
