@@ -1,46 +1,52 @@
+#[deny(missing_docs)]
 use crate::error::Error;
 use uio_rs;
 
+/// Supported data widths for the AXI Stream FIFO
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum StreamFifoDataWidth {
-    Bits32,
-    Bits64,
-    Bits128,
-    Bits256,
-    Bits512,
+pub enum StreamFifoValue {
+    U32,
+    U64,
+    U128,
+    U256,
+    U512,
 }
 
-impl StreamFifoDataWidth {
+impl StreamFifoValue {
+    /// Returns the byte count of the data width.
     pub fn byte_count(&self) -> usize {
         match self {
-            Self::Bits32 => size_of::<u32>(),
-            Self::Bits64 => size_of::<u64>(),
-            Self::Bits128 => size_of::<u128>(),
-            Self::Bits256 => 32,
-            Self::Bits512 => 64,
+            Self::U32 => size_of::<u32>(),
+            Self::U64 => size_of::<u64>(),
+            Self::U128 => size_of::<u128>(),
+            Self::U256 => 32,
+            Self::U512 => 64,
         }
     }
 }
 
+/// Represents an AXI Stream FIFO device.
 pub struct StreamFifo<'a> {
-    data_width: StreamFifoDataWidth,
+    data_width: StreamFifoValue,
     axi_lite: uio_rs::Map<'a>,
     axi: Option<uio_rs::Map<'a>>,
 }
 
 impl<'a> StreamFifo<'a> {
+    /// Creates a new `StreamFifo` instance from a UIO device using only AXI-lite interface.
     pub fn try_from_lite(device: &'a uio_rs::Device) -> Result<StreamFifo<'a>, Error> {
         let axi_lite = uio_rs::Map::new(device, 0)?;
         Ok(StreamFifo {
-            data_width: StreamFifoDataWidth::Bits32,
+            data_width: StreamFifoValue::U32,
             axi_lite,
             axi: None,
         })
     }
 
+    /// Creates a new `StreamFifo` instance from a UIO device.
     pub fn try_from(
         device: &'a uio_rs::Device,
-        data_width: StreamFifoDataWidth,
+        data_width: StreamFifoValue,
     ) -> Result<StreamFifo<'a>, Error> {
         let map_descriptions = device.maps();
         if map_descriptions.len() >= 2 {
@@ -54,7 +60,7 @@ impl<'a> StreamFifo<'a> {
         } else if map_descriptions.len() == 1 {
             let axi_lite = uio_rs::Map::new(device, 0)?;
             Ok(StreamFifo {
-                data_width: StreamFifoDataWidth::Bits32,
+                data_width: StreamFifoValue::U32,
                 axi_lite,
                 axi: None,
             })
@@ -63,10 +69,12 @@ impl<'a> StreamFifo<'a> {
         }
     }
 
-    pub fn data_width(&self) -> StreamFifoDataWidth {
+    /// Returns the data width of the FIFO.
+    pub fn data_width(&self) -> StreamFifoValue {
         self.data_width
     }
 
+    /// Resets the AXI Stream FIFO.
     pub fn reset(&mut self) -> Result<(), Error> {
         self.axi_lite
             .write_u32(REG_AXI4_STREAM_RESET, RESET_MAGIC)?;
@@ -86,12 +94,14 @@ impl<'a> StreamFifo<'a> {
         Ok(())
     }
 
+    /// Clears all interrupts for the AXI Stream FIFO.
     pub fn interrupts_clear(&mut self) -> Result<(), Error> {
         self.axi_lite
             .write_u32(REG_INTERRUPT_STATUS, INTERRUPT_ALL)
             .map_err(|e| e.into())
     }
 
+    /// Clears all RX interrupts for the AXI Stream FIFO.
     pub fn interrupts_clear_rx(&mut self) -> Result<(), Error> {
         self.axi_lite
             .write_u32(
@@ -101,6 +111,7 @@ impl<'a> StreamFifo<'a> {
             .map_err(|e| e.into())
     }
 
+    /// Clears all TX interrupts for the AXI Stream FIFO.
     pub fn interrupts_clear_tx(&mut self) -> Result<(), Error> {
         self.axi_lite
             .write_u32(
@@ -110,6 +121,7 @@ impl<'a> StreamFifo<'a> {
             .map_err(|e| e.into())
     }
 
+    ///
     pub fn read(&mut self, words: &mut [u32]) -> Result<(usize, u8), Error> {
         let occupancy = self.axi_lite.read_u32(REG_RX_OCCUPANCY)?;
         if occupancy == 0 {
@@ -139,18 +151,18 @@ impl<'a> StreamFifo<'a> {
             for _ in 0..read_count {
                 match axi.read_exact(FULL_REG_READ, fifo_word_size) {
                     Ok(fifo_chunk) => match self.data_width {
-                        StreamFifoDataWidth::Bits32 => {
+                        StreamFifoValue::U32 => {
                             let value = u32::from_ne_bytes(fifo_chunk.try_into().unwrap());
                             words[target_index] = value;
                             target_index += 1;
                         }
-                        StreamFifoDataWidth::Bits64 => {
+                        StreamFifoValue::U64 => {
                             let value = u64::from_ne_bytes(fifo_chunk.try_into().unwrap());
                             words[target_index] = ((value & 0xffffffff00000000) >> 32) as u32;
                             words[target_index + 1] = (value & 0x00000000ffffffff) as u32;
                             target_index += 2;
                         }
-                        StreamFifoDataWidth::Bits128 => {
+                        StreamFifoValue::U128 => {
                             let value = u128::from_ne_bytes(fifo_chunk.try_into().unwrap());
                             words[target_index] =
                                 ((value & 0xffffffff000000000000000000000000) >> 96) as u32;
@@ -190,13 +202,14 @@ impl<'a> StreamFifo<'a> {
             {
                 Error::UnderRun
             } else {
-                    unreachable!();
+                unreachable!();
             };
             return Err(error);
         }
         Ok((read_words, destination))
     }
 
+    /// Writes data to the AXI Stream FIFO.
     pub fn write(&mut self, data: &[u8], destination: u8) -> Result<usize, Error> {
         let fifo_word_size = self.data_width.byte_count();
         let word_count = (data.len() + (fifo_word_size - 1)) / fifo_word_size;
@@ -235,19 +248,19 @@ impl<'a> StreamFifo<'a> {
 
             for chunk in iter.into_iter() {
                 match self.data_width {
-                    StreamFifoDataWidth::Bits32 => {
+                    StreamFifoValue::U32 => {
                         axi.write_u32(
                             FULL_REG_WRITE,
                             u32::from_ne_bytes(chunk.try_into().unwrap()),
                         )?;
                     }
-                    StreamFifoDataWidth::Bits64 => {
+                    StreamFifoValue::U64 => {
                         axi.write_u64(
                             FULL_REG_WRITE,
                             u64::from_ne_bytes(chunk.try_into().unwrap()),
                         )?;
                     }
-                    StreamFifoDataWidth::Bits128 => {
+                    StreamFifoValue::U128 => {
                         axi.write_u128(
                             FULL_REG_WRITE,
                             u128::from_ne_bytes(chunk.try_into().unwrap()),
@@ -262,19 +275,19 @@ impl<'a> StreamFifo<'a> {
                 buffer[..remainder.len()].copy_from_slice(remainder);
                 let part = &buffer[..fifo_word_size];
                 match self.data_width {
-                    StreamFifoDataWidth::Bits32 => {
+                    StreamFifoValue::U32 => {
                         axi.write_u32(
                             FULL_REG_WRITE,
                             u32::from_ne_bytes(part.try_into().unwrap()),
                         )?;
                     }
-                    StreamFifoDataWidth::Bits64 => {
+                    StreamFifoValue::U64 => {
                         axi.write_u64(
                             FULL_REG_WRITE,
                             u64::from_ne_bytes(part.try_into().unwrap()),
                         )?;
                     }
-                    StreamFifoDataWidth::Bits128 => {
+                    StreamFifoValue::U128 => {
                         axi.write_u128(
                             FULL_REG_WRITE,
                             u128::from_ne_bytes(part.try_into().unwrap()),

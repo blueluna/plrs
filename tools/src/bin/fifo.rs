@@ -1,6 +1,6 @@
 use clap::{Arg, Command};
 use env_logger;
-use logik_xilinx::StreamFifoDataWidth;
+use logik_xilinx::StreamFifoValue;
 use std::process::ExitCode;
 use uio_rs::{self, Device};
 
@@ -80,9 +80,8 @@ fn main() -> ExitCode {
         println!("Interrupt {}", value);
     }
 
-    let mut fifo =
-        logik_xilinx::StreamFifo::try_from(&device, logik_xilinx::StreamFifoDataWidth::Bits64)
-            .expect("Failed to load FIFO");
+    let mut fifo = logik_xilinx::StreamFifo::try_from(&device, logik_xilinx::StreamFifoValue::U64)
+        .expect("Failed to load FIFO");
 
     match matches.subcommand() {
         Some(("read", cmd)) => {
@@ -109,7 +108,7 @@ fn main() -> ExitCode {
                 let bytes = size * data_width.byte_count();
                 let mut block = vec![0u8; bytes];
                 match data_width {
-                    StreamFifoDataWidth::Bits32 => {
+                    StreamFifoValue::U32 => {
                         let v = {
                             if text.starts_with("0x") {
                                 let (_, hex) = text.split_at(2);
@@ -126,7 +125,7 @@ fn main() -> ExitCode {
                             write_value = write_value.wrapping_add(1);
                         }
                     }
-                    StreamFifoDataWidth::Bits64 => {
+                    StreamFifoValue::U64 => {
                         let v = {
                             if text.starts_with("0x") {
                                 let (_, hex) = text.split_at(2);
@@ -143,7 +142,7 @@ fn main() -> ExitCode {
                             write_value = write_value.wrapping_add(1);
                         }
                     }
-                    StreamFifoDataWidth::Bits128 => {
+                    StreamFifoValue::U128 => {
                         let v = {
                             if text.starts_with("0x") {
                                 let (_, hex) = text.split_at(2);
@@ -160,10 +159,10 @@ fn main() -> ExitCode {
                             write_value = write_value.wrapping_add(1);
                         }
                     }
-                    StreamFifoDataWidth::Bits256 => {
+                    StreamFifoValue::U256 => {
                         eprintln!("256-bit not implemented");
                     }
-                    StreamFifoDataWidth::Bits512 => {
+                    StreamFifoValue::U512 => {
                         eprintln!("512-bit not implemented");
                     }
                 }
