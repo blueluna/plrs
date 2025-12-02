@@ -1,6 +1,6 @@
 use clap::{Arg, Command};
 use env_logger;
-use logik_xilinx::StreamFifoValue;
+use plrs_xilinx::StreamFifoValue;
 use std::process::ExitCode;
 use uio_rs::{self, Device};
 
@@ -80,7 +80,7 @@ fn main() -> ExitCode {
         println!("Interrupt {}", value);
     }
 
-    let mut fifo = logik_xilinx::StreamFifo::try_from(&device, logik_xilinx::StreamFifoValue::U64)
+    let mut fifo = plrs_xilinx::StreamFifo::try_from(&device, plrs_xilinx::StreamFifoValue::U64)
         .expect("Failed to load FIFO");
 
     match matches.subcommand() {

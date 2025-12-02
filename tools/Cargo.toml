@@ -1,5 +1,5 @@
 [package]
-name = "tools"
+name = "plrs-tools"
 version = "0.1.0"
 edition = "2024"
 authors = ["Erik Bånvik <erik.public@gmail.com>"]
@@ -8,6 +8,6 @@ license = "MIT"
 [dependencies]
 clap = "4.0"
 env_logger = "0.11"
-logik-xilinx = { path = "../xilinx" }
+plrs-xilinx = { path = "../xilinx" }
 uio-rs = { git = "https://github.com/blueluna/uio-rs.git" }
 # uio-rs = { path = "../../uio-rs/uio-rs" }

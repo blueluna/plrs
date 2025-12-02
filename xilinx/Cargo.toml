@@ -1,5 +1,5 @@
 [package]
-name = "logik-xilinx"
+name = "plrs-xilinx"
 version = "0.1.0"
 edition = "2024"
 authors = ["Erik Bånvik <erik.public@gmail.com>"]
