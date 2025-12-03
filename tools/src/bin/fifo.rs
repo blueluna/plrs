@@ -1,7 +1,7 @@
 use clap::{Arg, Command};
 use env_logger;
 use plrs_xilinx::StreamFifoValue;
-use std::process::ExitCode;
+use std::{process::ExitCode};
 use uio_rs::{self, Device};
 
 fn main() -> ExitCode {
@@ -82,15 +82,40 @@ fn main() -> ExitCode {
 
     let mut fifo = plrs_xilinx::StreamFifo::try_from(&device, plrs_xilinx::StreamFifoValue::U64)
         .expect("Failed to load FIFO");
+    let data_width = fifo.data_width();
 
     match matches.subcommand() {
         Some(("read", cmd)) => {
             if let Some(size) = cmd.get_one("size") {
-                let mut block = vec![0u32; *size];
-                match fifo.read(&mut block) {
-                    Ok((words, destination)) => {
-                        for w in &block[..words] {
-                            println!("{:08x}", w);
+                let bytes = size * data_width.byte_count();
+                let mut block = vec![0u8; bytes];
+                match fifo.read_bytes(&mut block) {
+
+                    Ok((byte_count, destination)) => {
+                        let iter = block[..byte_count].chunks_exact(data_width.byte_count());
+                        // let remainder = iter.remainder();
+
+                        match data_width {
+                            StreamFifoValue::U32 => {
+                                for word in iter {
+                                    let value = u32::from_ne_bytes(word.try_into().unwrap());
+                                    println!("{:08x}", value);
+                                }
+                            }
+                            StreamFifoValue::U64 => {
+                                for word in iter {
+                                    let value = u64::from_ne_bytes(word.try_into().unwrap());
+                                    println!("{:016x}", value);
+                                }
+                            }
+                            StreamFifoValue::U128 => {
+                                for word in iter {
+                                    let value = u128::from_ne_bytes(word.try_into().unwrap());
+                                    println!("{:032x}", value);
+                                }
+                            }
+                            StreamFifoValue::U256 | StreamFifoValue::U512 => {
+                            }
                         }
                         println!("destination {:02x}", destination);
                     }
@@ -104,7 +129,6 @@ fn main() -> ExitCode {
             if let (Some(size), Some(text)) =
                 (cmd.get_one::<usize>("size"), cmd.get_one::<String>("value"))
             {
-                let data_width = fifo.data_width();
                 let bytes = size * data_width.byte_count();
                 let mut block = vec![0u8; bytes];
                 match data_width {
@@ -166,7 +190,7 @@ fn main() -> ExitCode {
                         eprintln!("512-bit not implemented");
                     }
                 }
-                fifo.write(&block, 0).expect("Failed to write to FIFO");
+                fifo.write_bytes(&block, 0).expect("Failed to write to FIFO");
             }
         }
         _ => unreachable!("Invalid configuration"),

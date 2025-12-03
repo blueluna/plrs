@@ -23,42 +23,44 @@ impl StreamFifoValue {
             Self::U512 => 64,
         }
     }
+    /// Returns the byte count of the data width.
+    pub fn try_from_bits(bits: usize) -> Option<Self> {
+        match bits {
+            32 => Some(Self::U32),
+            64 => Some(Self::U64),
+            128 => Some(Self::U128),
+            256 => Some(Self::U256),
+            512 => Some(Self::U512),
+            _ => None,
+        }
+    }
 }
 
 /// Represents an AXI Stream FIFO device.
-pub struct StreamFifo<'a> {
+pub struct StreamFifo {
     data_width: StreamFifoValue,
-    axi_lite: uio_rs::Map<'a>,
-    axi: Option<uio_rs::Map<'a>>,
+    axi_lite: uio_rs::Map,
+    axi: Option<uio_rs::Map>,
 }
 
-impl<'a> StreamFifo<'a> {
-    /// Creates a new `StreamFifo` instance from a UIO device using only AXI-lite interface.
-    pub fn try_from_lite(device: &'a uio_rs::Device) -> Result<StreamFifo<'a>, Error> {
-        let axi_lite = uio_rs::Map::new(device, 0)?;
-        Ok(StreamFifo {
-            data_width: StreamFifoValue::U32,
-            axi_lite,
-            axi: None,
-        })
-    }
+impl StreamFifo {
 
     /// Creates a new `StreamFifo` instance from a UIO device.
     pub fn try_from(
-        device: &'a uio_rs::Device,
+        device: &uio_rs::Device,
         data_width: StreamFifoValue,
-    ) -> Result<StreamFifo<'a>, Error> {
+    ) -> Result<StreamFifo, Error> {
         let map_descriptions = device.maps();
         if map_descriptions.len() >= 2 {
-            let axi_lite = uio_rs::Map::new(device, 0)?;
-            let axi = uio_rs::Map::new(device, 1)?;
+            let axi_lite = uio_rs::Map::try_from_device(device, 0)?;
+            let axi = uio_rs::Map::try_from_device(device, 1)?;
             Ok(StreamFifo {
                 data_width,
                 axi_lite,
                 axi: Some(axi),
             })
         } else if map_descriptions.len() == 1 {
-            let axi_lite = uio_rs::Map::new(device, 0)?;
+            let axi_lite = uio_rs::Map::try_from_device(device, 0)?;
             Ok(StreamFifo {
                 data_width: StreamFifoValue::U32,
                 axi_lite,
@@ -121,8 +123,8 @@ impl<'a> StreamFifo<'a> {
             .map_err(|e| e.into())
     }
 
-    ///
-    pub fn read(&mut self, words: &mut [u32]) -> Result<(usize, u8), Error> {
+    /// Reads bytes from the AXI Stream FIFO.
+    pub fn read_bytes(&mut self, data: &mut [u8]) -> Result<(usize, u8), Error> {
         let occupancy = self.axi_lite.read_u32(REG_RX_OCCUPANCY)?;
         if occupancy == 0 {
             return Err(Error::Empty);
@@ -131,64 +133,50 @@ impl<'a> StreamFifo<'a> {
         // with bus error if there has been no transfer.
         self.interrupts_clear_rx()?;
         let packet_bytes = (self.axi_lite.read_u32(REG_RX_LENGTH)? & 0x003fffff) as usize;
-        let words_bytes = words.len() * size_of::<u32>();
-        let read_bytes = words_bytes.min(packet_bytes);
-        let read_words = read_bytes / size_of::<u32>();
+        let read_bytes = data.len().min(packet_bytes);
         let destination = self.axi_lite.read_u32(REG_RX_DESTINATION)? as u8;
         log::debug!(
-            "Occupancy {} Receive {} bytes {} bytes {} words expected ",
+            "Occupancy {} Receive {} bytes {} bytes {} bytes expected ",
             occupancy,
             packet_bytes,
             read_bytes,
-            words.len()
+            data.len()
         );
+        let fifo_word_size = self.data_width.byte_count();
+        let read_count = (read_bytes + (fifo_word_size - 1)) / fifo_word_size;
+
+        // This access is hard to get right without getting double or more reads on the register for each call.
+        // The following reasons that this is because of the memcpy call in arm64 libc.
+        // https://adaptivesupport.amd.com/s/question/0D54U00008Z19O5SAJ/why-are-my-uio-accesses-from-python-being-done-twice-in-the-logic-using-petalinuxvivado-20241?language=en_US
+        // To convert the memory mapped byte slice to a u32 seems to work in this case...
 
         if let Some(ref axi) = self.axi {
-            let fifo_word_size = self.data_width.byte_count();
-            let read_count = read_bytes / fifo_word_size;
-            let mut target_index = 0;
-            log::debug!("AXI {} count {} bytes", read_count, fifo_word_size);
-            for _ in 0..read_count {
-                match axi.read_exact(FULL_REG_READ, fifo_word_size) {
-                    Ok(fifo_chunk) => match self.data_width {
-                        StreamFifoValue::U32 => {
-                            let value = u32::from_ne_bytes(fifo_chunk.try_into().unwrap());
-                            words[target_index] = value;
-                            target_index += 1;
-                        }
-                        StreamFifoValue::U64 => {
-                            let value = u64::from_ne_bytes(fifo_chunk.try_into().unwrap());
-                            words[target_index] = ((value & 0xffffffff00000000) >> 32) as u32;
-                            words[target_index + 1] = (value & 0x00000000ffffffff) as u32;
-                            target_index += 2;
-                        }
-                        StreamFifoValue::U128 => {
-                            let value = u128::from_ne_bytes(fifo_chunk.try_into().unwrap());
-                            words[target_index] =
-                                ((value & 0xffffffff000000000000000000000000) >> 96) as u32;
-                            words[target_index + 1] =
-                                ((value & 0x00000000ffffffff0000000000000000) >> 64) as u32;
-                            words[target_index + 2] =
-                                ((value & 0x0000000000000000ffffffff00000000) >> 32) as u32;
-                            words[target_index + 3] =
-                                (value & 0x000000000000000000000000ffffffff) as u32;
-                            target_index += 4;
-                        }
-                        _ => {
-                            unimplemented!();
-                        }
-                    },
-                    Err(ref error) => {
-                        log::warn!("Failed to read AXI chunk, {:?}", error);
+            for n in 0..read_count {
+                let offset = n * fifo_word_size;
+                let fifo_chunk = axi.read_exact(FULL_REG_READ, fifo_word_size)?;
+                match self.data_width() {
+                    StreamFifoValue::U32 => {
+                        let v = u32::from_ne_bytes(fifo_chunk.try_into().unwrap());
+                        data[offset..offset + fifo_word_size].copy_from_slice(&v.to_ne_bytes());
+                    }
+                    StreamFifoValue::U64 => {
+                        let v = u64::from_ne_bytes(fifo_chunk.try_into().unwrap());
+                        data[offset..offset + fifo_word_size].copy_from_slice(&v.to_ne_bytes());
+                    }
+                    StreamFifoValue::U128 => {
+                        let v = u128::from_ne_bytes(fifo_chunk.try_into().unwrap());
+                        data[offset..offset + fifo_word_size].copy_from_slice(&v.to_ne_bytes());
+                    }
+                    StreamFifoValue::U256 | StreamFifoValue::U512 => {
+                        unimplemented!()
                     }
                 }
             }
         } else {
-            log::debug!("AXI-lite {} words", read_words);
-            for w in &mut words[..read_words] {
+            for n in 0..read_count {
+                let offset = n * fifo_word_size;
                 let v = self.axi_lite.read_u32(REG_RX_DATA)?;
-                log::debug!("Receive {:08x}", v);
-                *w = v;
+                data[offset..offset + fifo_word_size].copy_from_slice(&v.to_ne_bytes());
             }
         }
         let interrupts = self.axi_lite.read_u32(REG_INTERRUPT_STATUS)?;
@@ -206,11 +194,11 @@ impl<'a> StreamFifo<'a> {
             };
             return Err(error);
         }
-        Ok((read_words, destination))
+        Ok((read_bytes, destination))
     }
 
-    /// Writes data to the AXI Stream FIFO.
-    pub fn write(&mut self, data: &[u8], destination: u8) -> Result<usize, Error> {
+    /// Writes bytes to the AXI Stream FIFO.
+    pub fn write_bytes(&mut self, data: &[u8], destination: u8) -> Result<usize, Error> {
         let fifo_word_size = self.data_width.byte_count();
         let word_count = (data.len() + (fifo_word_size - 1)) / fifo_word_size;
         let mut buffer = [0u8; 64];
@@ -242,7 +230,7 @@ impl<'a> StreamFifo<'a> {
             remainder.len()
         );
 
-        let bytes = if let Some(ref mut axi) = self.axi {
+        let num_bytes = if let Some(ref mut axi) = self.axi {
             // It seems like it is not possible to just copy slices of the same size to the FIFO data register.
             // Following type shenanigans seems to work.
 
@@ -313,8 +301,8 @@ impl<'a> StreamFifo<'a> {
             data.len()
         };
 
-        log::debug!("Transmit {} bytes", bytes);
-        self.axi_lite.write_u32(REG_TX_LENGTH, bytes as u32)?;
+        log::debug!("Transmit {} bytes", num_bytes);
+        self.axi_lite.write_u32(REG_TX_LENGTH, num_bytes as u32)?;
         loop {
             let interrupts = self.axi_lite.read_u32(REG_INTERRUPT_STATUS)?;
             if interrupts & INTERRUPT_TX_ERROR != 0 {
@@ -335,7 +323,19 @@ impl<'a> StreamFifo<'a> {
                 break;
             }
         }
-        Ok(bytes)
+        Ok(num_bytes)
+    }
+
+    /// Writes data to the AXI Stream FIFO.
+    pub fn write(&mut self, data: &[u32], destination: u8) -> Result<usize, Error> {
+        let bytes = {
+            let len = size_of::<u32>() * data.len();
+            let ptr = data.as_ptr() as *const u8;
+            unsafe {
+                std::slice::from_raw_parts(ptr, len)
+            }
+        };
+        self.write_bytes(bytes, destination)
     }
 }
 
